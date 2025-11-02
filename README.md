@@ -32,7 +32,7 @@ Added a configuration block near the top of `main.cpp`:
 
 ```cpp
 #define FORWARD_TOPIC "espresense/serial_out"
-#define FORWARDED_SERIAL_TOPIC "forwarded_serial"
+#define FORWARDED_SERIAL_TOPIC "espresense/forwarded_serial"
 #define UART1_TX_PIN 7   // TX → other ESP32 RX
 #define UART1_RX_PIN 6   // RX ← other ESP32 TX (optional)
 #define UART_BAUD 115200
