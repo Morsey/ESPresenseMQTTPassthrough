@@ -3,6 +3,25 @@
 
 #include "esp_heap_caps.h"
 
+
+// ===== Serial-forward config (ESP32-C3 uses UART1) =====
+#ifndef FORWARD_TOPIC
+#define FORWARD_TOPIC "espresense/serial_out"   // <-- change to your exact topic
+#endif
+#ifndef FORWARDED_SERIAL_TOPIC
+#define FORWARDED_SERIAL_TOPIC "espresense/forwarded_serial"
+#endif
+#ifndef UART1_TX_PIN
+#define UART1_TX_PIN 7    // TX to the other ESP32's RX
+#endif
+#ifndef UART1_RX_PIN
+#define UART1_RX_PIN 6    // RX from the other ESP32's TX (optional if one-way)
+#endif
+#ifndef UART_BAUD
+#define UART_BAUD 115200
+#endif
+// =======================================================
+
 void heapCapsAllocFailedHook(size_t requestedSize, uint32_t caps, const char *functionName)
 {
     printf("%s was called but failed to allocate %d bytes with 0x%X capabilities. \n",functionName, requestedSize, caps);
@@ -297,6 +316,7 @@ void onMqttConnect(bool sessionPresent) {
     mqttClient.subscribe("espresense/rooms/*/+/set", 1);
     mqttClient.subscribe(setTopic.c_str(), 1);
     mqttClient.subscribe(configTopic.c_str(), 1);
+    mqttClient.subscribe(FORWARD_TOPIC, 0);
     GUI::Connected(true, true);
 }
 
@@ -332,6 +352,13 @@ void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
  * @param payload MQTT message payload string (null-terminated).
  */
 void onMqttMessage(const char *topic, const char *payload) {
+    // Forward exact topic payload to UART1 as a newline-terminated string
+    if (topic && strcmp(topic, FORWARD_TOPIC) == 0) {
+        Serial1.println(payload ? payload : "");             // send just the payload
+        Log.printf("%d UART1  | %s\r\n", xPortGetCoreID(),   // optional debug
+                payload ? payload : "");
+        return; // stop further handling for this message
+    }
     String const top = String(topic);
     String pay = String(payload);
 
@@ -403,6 +430,33 @@ void onMqttMessageRaw(char *topic, char *payload, AsyncMqttClientMessageProperti
     if (len + index == total) {
         onMqttMessage(topic, payload_buffer_.data());
         payload_buffer_.clear();
+    }
+}
+
+// Read newline-delimited input from UART1 and publish each line to MQTT.
+// Lines are published WITHOUT the trailing CR/LF.
+void PumpSerial1ToMqtt() {
+    static String line;
+
+    while (Serial1.available() > 0) {
+        char c = (char)Serial1.read();
+
+        if (c == '\r') {
+            // ignore CR
+            continue;
+        } else if (c == '\n') {
+            // end of line -> publish if non-empty
+            if (line.length() > 0 && mqttClient.connected()) {
+                mqttClient.publish(FORWARDED_SERIAL_TOPIC, 0, false, line.c_str());
+                // optional: debug log
+                Log.printf("%d MQTT  -> %s: %s\r\n", xPortGetCoreID(), FORWARDED_SERIAL_TOPIC, line.c_str());
+            }
+            line = ""; // reset for next line
+        } else {
+            // accumulate (cap length to avoid runaway)
+            if (line.length() < 512) line += c;
+            // else: drop extra chars until newline
+        }
     }
 }
 
@@ -573,6 +627,7 @@ void setup() {
 #else
     Serial.begin(115200);
 #endif
+    Serial1.begin(UART_BAUD, SERIAL_8N1, UART1_RX_PIN, UART1_TX_PIN);
     Serial.setDebugOutput(true);
 #ifdef VERBOSE
     esp_log_level_set("*", ESP_LOG_DEBUG);
@@ -620,6 +675,7 @@ void setup() {
     Log.println();
 }
 
+
 /**
  * @brief Executes the main periodic processing and dispatches per-subsystem loop handlers.
  *
@@ -632,34 +688,15 @@ void setup() {
  * SerialImprov, NTP, and (conditionally) AXP192 and various sensor modules.
  */
 void loop() {
+
+    PumpSerial1ToMqtt();   // <-- added: forward any received UART1 lines to MQTT
     reportLoop();
     static unsigned long lastSlowLoop = 0;
     if (millis() - lastSlowLoop > 5000) {
         lastSlowLoop = millis();
         auto freeHeap = ESP.getFreeHeap();
         if (freeHeap < 20000) Log.printf("Low memory: %u bytes free\r\n", freeHeap);
-        if (freeHeap > 70000) Updater::Loop();
-        // --- Quick build test: flash onboard LED (ESP32-C3 SuperMini) ---
-        #ifndef LED_PIN
-        #define LED_PIN 8   // onboard blue LED on most ESP32-C3 SuperMinis
-        #endif
-
-        const bool LED_INVERTED = true;  // LED is active LOW (LOW = ON, HIGH = OFF)
-
-        pinMode(LED_PIN, OUTPUT);
-
-        // two short flashes
-        for (int i = 0; i < 2; i++) {
-            digitalWrite(LED_PIN, LED_INVERTED ? LOW : HIGH);   // turn LED on
-            delay(150);
-            digitalWrite(LED_PIN, LED_INVERTED ? HIGH : LOW);   // turn LED off
-            delay(150);
-        }
-
-        // leave LED off at end
-        digitalWrite(LED_PIN, LED_INVERTED ? HIGH : LOW);
-
-       
+        if (freeHeap > 70000) Updater::Loop();   
     }
     GUI::Loop();
     Motion::Loop();
