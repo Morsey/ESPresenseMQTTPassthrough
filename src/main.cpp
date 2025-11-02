@@ -567,6 +567,7 @@ void scanTask(void *parameter) {
  * starts the BLE scan task, and performs MQTT/reporting setup.
  */
 void setup() {
+
 #ifdef FAST_MONITOR
     Serial.begin(1500000);
 #else
@@ -638,6 +639,27 @@ void loop() {
         auto freeHeap = ESP.getFreeHeap();
         if (freeHeap < 20000) Log.printf("Low memory: %u bytes free\r\n", freeHeap);
         if (freeHeap > 70000) Updater::Loop();
+        // --- Quick build test: flash onboard LED (ESP32-C3 SuperMini) ---
+        #ifndef LED_PIN
+        #define LED_PIN 8   // onboard blue LED on most ESP32-C3 SuperMinis
+        #endif
+
+        const bool LED_INVERTED = true;  // LED is active LOW (LOW = ON, HIGH = OFF)
+
+        pinMode(LED_PIN, OUTPUT);
+
+        // two short flashes
+        for (int i = 0; i < 2; i++) {
+            digitalWrite(LED_PIN, LED_INVERTED ? LOW : HIGH);   // turn LED on
+            delay(150);
+            digitalWrite(LED_PIN, LED_INVERTED ? HIGH : LOW);   // turn LED off
+            delay(150);
+        }
+
+        // leave LED off at end
+        digitalWrite(LED_PIN, LED_INVERTED ? HIGH : LOW);
+
+       
     }
     GUI::Loop();
     Motion::Loop();
